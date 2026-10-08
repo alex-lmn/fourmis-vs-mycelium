@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fourmis vs Mycélium</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #070a12;
+    --panel: #0c1220;
+    --border: #1c2436;
+    --label: #6b7a99;
+    --text: #e8edf7;
+    --cyan: #22d3ee;
+    --violet: #a78bfa;
+    --red: #ef4444;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--mono); font-size: 13px;
+  }
+  .app {
+    display: grid; grid-template-columns: 340px 1fr; gap: 16px;
+    padding: 16px; height: 100vh;
+  }
+  aside { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding-right: 4px; }
+
+  h1 {
+    display: flex; align-items: center; gap: 12px; margin: 4px 0 4px 2px;
+    font-size: 18px; letter-spacing: .08em; color: var(--cyan);
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+    box-shadow: 0 0 8px var(--red); animation: pulse 1.2s infinite; flex: none;
+  }
+  .dot.paused { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; animation: none; }
+  .dot.done   { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: none; }
+  .dot.off    { background: #475569; box-shadow: none; animation: none; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .label {
+    font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--label); margin-bottom: 6px;
+  }
+  .big { font-size: 22px; font-weight: 700; }
+  .seed { color: var(--violet); word-break: break-all; }
+  .tps { color: var(--cyan); }
+  .small { font-size: 12px; color: var(--label); font-weight: 400; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; margin-top: 6px; }
+  .kv span:nth-child(odd) { color: var(--label); }
+  .kv span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .bar > div { height: 100%; transition: width .3s; }
+
+  .chip {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    vertical-align: middle; margin-right: 6px;
+  }
+  .icon { width: 14px; height: 14px; vertical-align: middle; margin-right: 4px; }
+  .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; font-size: 12px; color: var(--label); }
+
+  #chart { width: 100%; height: 110px; display: block; margin-top: 4px; }
+
+  .toggles label { display: block; margin: 4px 0; cursor: pointer; }
+  .toggles input { accent-color: var(--cyan); margin-right: 6px; }
+
+  input[type=number] {
+    width: 100%; background: var(--bg); color: var(--text); font-family: var(--mono);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-top: 3px;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .grid2 label { font-size: 11px; color: var(--label); }
+  button {
+    width: 100%; padding: 8px; border-radius: 6px; cursor: pointer;
+    font-family: var(--mono); font-weight: 700; letter-spacing: .05em;
+    background: transparent; color: var(--cyan); border: 1px solid var(--cyan);
+  }
+  button:hover { background: rgba(34, 211, 238, .1); }
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .error { color: var(--red); font-size: 12px; margin-top: 8px; }
+
+  main {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    min-height: 0; overflow: hidden;
+  }
+  .banner {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(7, 10, 18, .92); border: 1px solid var(--cyan); border-radius: 8px;
+    padding: 20px 32px; text-align: center; font-size: 22px; font-weight: 700; max-width: 90%;
+  }
+  .hud {
+    position: absolute; top: 12px; left: 12px; padding: 6px 10px; border-radius: 6px;
+    background: rgba(7, 10, 18, .75); border: 1px solid var(--border); font-size: 12px;
+  }
+
+  @media (max-width: 800px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    main { height: 70vh; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1><span class="dot off" id="dot"></span>FOURMIS vs MYCÉLIUM</h1>
+
+    <div class="panel">
+      <div class="label">Seed déterministe</div>
+      <div class="big seed" id="seed">--</div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Fréquence serveur (tick) / rendu</div>
+      <div class="big"><span class="tps" id="tps">--</span> TPS / <span class="small" id="fps">--</span> FPS</div>
+      <div class="small" id="tick">tick --</div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Météo</div>
+      <div class="big" id="weather">--</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <div class="label">Objectif : manger la forêt</div>
+        <div class="small" id="forestEaten">--</div>
+      </div>
+      <div class="big" style="color:var(--green)"><span id="forestPct">--</span> % restants</div>
+      <div class="bar"><div id="forestBar" style="background:var(--green)"></div></div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Colonie</div>
+      <div class="big" style="color:var(--amber)"><span id="ants">--</span> fourmis</div>
+      <div class="kv">
+        <span>Nids</span><span id="nests">--</span>
+        <span>Ouvrières</span><span id="workers">--</span>
+        <span>Soldates</span><span id="soldiers">--</span>
+        <span>Transportent</span><span id="carrying">--</span>
+        <span>Œufs (respawn)</span><span id="eggs">--</span>
+        <span>Réserve du nid</span><span id="stock">--</span>
+        <span>Naissances</span><span id="born">--</span>
+        <span>Mortes : virus</span><span id="deadVirus">--</span>
+        <span>Mortes : faim</span><span id="deadStarve">--</span>
+        <span>Mortes : vieillesse</span><span id="deadOld">--</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Virus</div>
+      <div class="big" style="color:#a3e635"><span id="infected">--</span> infectées</div>
+      <div class="bar"><div id="infectedBar" style="background:#a3e635"></div></div>
+      <div class="kv">
+        <span>Zombies</span><span id="zombies">--</span>
+        <span>Immunisées</span><span id="immune">--</span>
+        <span>Contaminations</span><span id="infections">--</span>
+        <span>…par des cadavres</span><span id="corpseInfections">--</span>
+        <span>Guéries au nid</span><span id="cured">--</span>
+        <span>Guéries par toilettage</span><span id="groomed">--</span>
+        <span>Zombies éliminées</span><span id="zombiesKilled">--</span>
+        <span>Cadavres évacués</span><span id="evacuated">--</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Mycélium</div>
+      <div class="big" style="color:var(--violet)"><span id="fungus">--</span> champignons</div>
+      <div class="kv">
+        <span>Normaux</span><span id="mushrooms">--</span>
+        <span>Venimeux</span><span id="venomous">--</span>
+        <span>Mycélium (repousse)</span><span id="mycelium">--</span>
+        <span>Tués par soldates</span><span id="mushKilled">--</span>
+        <span>Mangés (empoisonnent)</span><span id="mushEaten">--</span>
+        <span>Nés de spores</span><span id="sporeBirths">--</span>
+        <span>Nés de cadavres</span><span id="corpseBirths">--</span>
+        <span>Nés (jeu de la vie)</span><span id="lifeBirths">--</span>
+        <span>Repoussés</span><span id="regrowths">--</span>
+        <span>Spores écrasées</span><span id="sporesCrushed">--</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Historique</div>
+      <canvas id="chart"></canvas>
+      <div class="legend" style="margin-top:6px">
+        <span><span class="chip" style="background:#fbbf24"></span>Fourmis</span>
+        <span><span class="chip" style="background:#a78bfa"></span>Champignons</span>
+        <span><span class="chip" style="background:#4ade80"></span>Forêt %</span>
+        <span><span class="chip" style="background:#ef4444"></span>Soldates</span>
+        <span><span class="chip" style="background:#a3e635"></span>Infectées</span>
+      </div>
+    </div>
+
+    <div class="panel toggles">
+      <div class="label">Calques</div>
+      <label><input type="checkbox" id="showFood" checked>Phéromone nourriture</label>
+      <label><input type="checkbox" id="showHome">Phéromone maison</label>
+      <label><input type="checkbox" id="showDanger" checked>Phéromone danger</label>
+      <label><input type="checkbox" id="showIcons" checked>Icônes champignons</label>
+      <label><input type="checkbox" id="showAnts" checked>Fourmis</label>
+      <label><input type="checkbox" id="showSky" checked>Pluie</label>
+    </div>
+
+    <div class="panel">
+      <div class="label">Légende</div>
+      <div class="legend">
+        <span><span class="chip" style="background:#ffd34d"></span>Ouvrière</span>
+        <span><span class="chip" style="background:#ffffff"></span>Chargée</span>
+        <span><span class="chip" style="background:#ff4d3d"></span>Soldate</span>
+        <span><span class="chip" style="background:#a3e635"></span>Infectée</span>
+        <span><span class="chip" style="background:#e879f9"></span>Souche venimeuse</span>
+        <span><span class="chip" style="background:#00ff9c"></span>Zombie</span>
+        <span><span class="chip" style="background:#60a5fa"></span>Immunisée</span>
+        <span><span class="chip" style="background:#2e8c3a"></span>Forêt</span>
+        <span><img id="iconNormal" class="icon" alt="">Champignon</span>
+        <span><img id="iconVenom" class="icon" alt="">Venimeux</span>
+        <span><span class="chip" style="background:#3c2d46"></span>Mycélium</span>
+        <span><span class="chip" style="background:#8c5a32"></span>Nid</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="label">Nouvelle partie</div>
+      <div class="grid2">
+        <label>Largeur<input type="number" id="wIn" min="60" max="2000"></label>
+        <label>Hauteur<input type="number" id="hIn" min="60" max="2000"></label>
+        <label>Fourmis<input type="number" id="antsIn" min="1" max="50000"></label>
+        <label>Seed<input type="number" id="seedIn" placeholder="aléatoire"></label>
+      </div>
+      <div class="buttons">
+        <button id="pause">PAUSE</button>
+        <button id="restart">RESTART</button>
+      </div>
+      <div class="error" id="error" hidden></div>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <canvas id="cv"></canvas>
+    <div class="hud" id="hud">--</div>
+    <div class="banner" id="banner" hidden></div>
+  </main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const terrain = document.createElement('canvas'), tctx = terrain.getContext('2d');
+let state = null;
+let formInit = false;
+
+// Couleurs des cases (code envoye par le serveur).
+const SOIL = [28, 22, 17];
+const FOREST = [null, [22, 58, 28], [28, 78, 34], [34, 98, 42], [40, 118, 50], [46, 140, 58]];
+const MUSHROOM = [205, 140, 80];
+const VENOMOUS = [170, 80, 240];
+const NEST = [140, 90, 50];
+const MYCELIUM = [60, 45, 70];
+// 0 ouvriere, 1 chargee, 2 soldate, 3 infectee, 4 souche venimeuse, 5 zombie, 6 immunisee
+const ANT_COLORS = ['#ffd34d', '#ffffff', '#ff4d3d', '#a3e635', '#e879f9', '#00ff9c', '#60a5fa'];
+
+function cellColor(c) {
+  switch (c) {
+    case 0: return SOIL;
+    case 6: return MUSHROOM;
+    case 7: return VENOMOUS;
+    case 8: return NEST;
+    case 9: return MYCELIUM;
+    default: return FOREST[c];
+  }
+}
+
+// --- Reception de l'etat depuis le serveur (SSE) ---
+const es = new EventSource('/events');
+es.onmessage = e => { state = JSON.parse(e.data); updatePanels(); };
+es.onerror = () => { $('dot').className = 'dot off'; };
+
+const fmt = n => Math.round(n).toLocaleString('fr-FR');
+function set(id, v) { $(id).textContent = v; }
+
+function updatePanels() {
+  const s = state, st = s.stats;
+  $('dot').className = 'dot' + (s.result ? ' done' : s.paused ? ' paused' : '');
+  $('pause').textContent = s.paused ? 'REPRENDRE' : 'PAUSE';
+  set('seed', s.seed);
+  set('tps', Math.round(s.tps));
+  set('tick', 'tick ' + fmt(s.tick));
+
+  if (!formInit) {
+    $('wIn').value = s.w;
+    $('hIn').value = s.h;
+    $('antsIn').value = s.ants;
+    formInit = true;
+  }
+
+  // Meteo
+  set('weather', s.raining ? '🌧 Pluie : spores ×3' : 'Temps sec');
+
+  // Foret
+  const pct = s.initialForest ? 100 * s.forestLeft / s.initialForest : 0;
+  set('forestPct', pct.toFixed(1));
+  set('forestEaten', fmt(st.forestEaten) + ' mangés');
+  $('forestBar').style.width = pct + '%';
+
+  // Colonie
+  set('ants', fmt(s.ants));
+  set('nests', `${s.nests.length} (${fmt(st.nestsFounded)} fondés)`);
+  set('workers', fmt(s.workers));
+  set('soldiers', fmt(s.soldiers));
+  set('carrying', fmt(s.carrying));
+  set('eggs', fmt(s.eggs));
+  set('stock', fmt(s.stock));
+  set('born', fmt(st.born));
+  set('deadVirus', fmt(st.deadVirus));
+
+  // Virus
+  set('infected', fmt(s.infected));
+  $('infectedBar').style.width = (s.ants ? 100 * s.infected / s.ants : 0) + '%';
+  set('zombies', fmt(s.zombies));
+  set('immune', fmt(s.immune));
+  set('infections', fmt(st.infections));
+  set('corpseInfections', fmt(st.corpseInfections));
+  set('cured', fmt(st.cured));
+  set('groomed', fmt(st.groomed));
+  set('zombiesKilled', fmt(st.zombiesKilled));
+  set('evacuated', fmt(st.evacuated));
+  set('deadStarve', fmt(st.deadStarve));
+  set('deadOld', fmt(st.deadOld));
+
+  // Champignons
+  set('fungus', fmt(s.mushrooms + s.venomous));
+  set('mushrooms', fmt(s.mushrooms));
+  set('venomous', fmt(s.venomous));
+  set('mycelium', fmt(s.mycelium));
+  set('mushKilled', fmt(st.mushKilled));
+  set('mushEaten', fmt(st.mushEaten));
+  set('sporeBirths', fmt(st.sporeBirths));
+  set('corpseBirths', fmt(st.corpseBirths));
+  set('lifeBirths', fmt(st.lifeBirths));
+  set('regrowths', fmt(st.regrowths));
+  set('sporesCrushed', fmt(st.sporesCrushed));
+
+  set('hud', `${fmt(s.ants)} fourmis · ${fmt(s.mushrooms + s.venomous)} champignons · forêt ${pct.toFixed(1)} %`);
+
+  const banner = $('banner');
+  if (s.result === 'ants') {
+    banner.innerHTML = `LES FOURMIS ONT MANGÉ LA FORÊT<div class="small">plus que ${pct.toFixed(1)} % de forêt · tick ${fmt(s.tick)} · ${fmt(s.ants)} survivantes</div>`;
+  } else if (s.result === 'fungus') {
+    banner.innerHTML = `LE MYCÉLIUM A GAGNÉ<div class="small">colonie éteinte au tick ${fmt(s.tick)} · forêt restante ${pct.toFixed(1)} %</div>`;
+  }
+  banner.hidden = !s.result;
+
+  drawChart();
+}
+
+// --- Courbes d'historique ---
+function drawChart() {
+  const c = $('chart'), g = c.getContext('2d');
+  const W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+  g.clearRect(0, 0, W, H);
+  const h = state.history;
+  if (!h || h.length < 2) return;
+
+  const series = [
+    { color: '#fbbf24', v: p => p.workers + p.soldiers },
+    { color: '#a78bfa', v: p => p.mushrooms + p.venomous },
+    { color: '#ef4444', v: p => p.soldiers },
+    { color: '#a3e635', v: p => p.infected },
+    { color: '#4ade80', v: p => p.forestPct, max: 100 },
+  ];
+  g.strokeStyle = '#1c2436';
+  g.beginPath(); g.moveTo(0, H - 0.5); g.lineTo(W, H - 0.5); g.stroke();
+  for (const s of series) {
+    const max = s.max || Math.max(1, ...h.map(s.v));
+    g.strokeStyle = s.color;
+    g.lineWidth = 1.5;
+    g.beginPath();
+    h.forEach((p, i) => {
+      const x = i / (h.length - 1) * W;
+      const y = H - 2 - s.v(p) / max * (H - 6);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  }
+}
+
+// --- Rendu de la carte + calcul des FPS ---
+let frames = 0, lastFps = performance.now();
+
+function draw() {
+  frames++;
+  const now = performance.now();
+  if (now - lastFps >= 1000) {
+    set('fps', Math.round(frames * 1000 / (now - lastFps)));
+    frames = 0;
+    lastFps = now;
+  }
+  if (state) render();
+  requestAnimationFrame(draw);
+}
+
+// Icone de champignon dessinee une fois dans un petit canvas, puis recopiee.
+// (chapeau arrondi a pois + pied clair ; violet pour un venimeux)
+const sprites = {};
+function mushroomSprite(venom, size) {
+  const key = (venom ? 'v' : 'n') + Math.round(size);
+  if (sprites[key]) return sprites[key];
+  const s = Math.round(size);
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.lineWidth = Math.max(1, s / 12);
+  g.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+
+  // pied
+  g.fillStyle = '#f1e4cf';
+  g.beginPath();
+  g.rect(s * 0.38, s * 0.48, s * 0.24, s * 0.44);
+  g.fill();
+  g.stroke();
+
+  // chapeau
+  g.fillStyle = venom ? '#a855f7' : '#d9622b';
+  g.beginPath();
+  g.ellipse(s / 2, s * 0.52, s * 0.46, s * 0.42, 0, Math.PI, 2 * Math.PI);
+  g.closePath();
+  g.fill();
+  g.stroke();
+
+  // pois
+  g.fillStyle = venom ? '#d9f99d' : '#fff7ed';
+  for (const [x, y] of [[0.32, 0.36], [0.6, 0.27], [0.7, 0.44]]) {
+    g.beginPath();
+    g.arc(s * x, s * y, Math.max(0.8, s * 0.07), 0, 2 * Math.PI);
+    g.fill();
+  }
+
+  sprites[key] = c;
+  return c;
+}
+$('iconNormal').src = mushroomSprite(false, 28).toDataURL();
+$('iconVenom').src = mushroomSprite(true, 28).toDataURL();
+
+function render() {
+  const { w, h, cells, phFood, phHome, phDanger, antData } = state;
+  const showFood = $('showFood').checked, showHome = $('showHome').checked;
+  const showDanger = $('showDanger').checked;
+
+  // 1) Terrain + pheromones : 1 pixel par case dans un canvas cache.
+  if (terrain.width !== w || terrain.height !== h) { terrain.width = w; terrain.height = h; }
+  const img = tctx.createImageData(w, h);
+  const px = img.data;
+  for (let i = 0; i < w * h; i++) {
+    const base = cellColor(cells.charCodeAt(i) - 48);
+    let r = base[0], g = base[1], b = base[2];
+    if (showFood) { const l = phFood.charCodeAt(i) - 48; g += l * 10; b += l * 18; }
+    if (showHome) { const l = phHome.charCodeAt(i) - 48; b += l * 10; }
+    if (showDanger) { const l = phDanger.charCodeAt(i) - 48; r += l * 20; }
+    px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255;
+  }
+  tctx.putImageData(img, 0, 0);
+
+  // 2) Agrandissement pour remplir la zone d'affichage.
+  const stage = $('stage');
+  const scale = Math.min((stage.clientWidth - 16) / w, (stage.clientHeight - 16) / h);
+  const cw = Math.floor(w * scale), ch = Math.floor(h * scale);
+  if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(terrain, 0, 0, cw, ch);
+
+  // 3) Icones de champignon : la carte est decoupee en carres de k x k cases
+  //    (environ 10 pixels a l'ecran) ; chaque carre qui contient des
+  //    champignons recoit une icone, violette si les venimeux dominent.
+  if ($('showIcons').checked) {
+    const k = Math.max(1, Math.ceil(10 / scale));
+    const iconSize = Math.max(8, k * scale);
+    for (let by = 0; by < h; by += k) {
+      for (let bx = 0; bx < w; bx += k) {
+        let normal = 0, venom = 0;
+        for (let y = by; y < Math.min(h, by + k); y++) {
+          for (let x = bx; x < Math.min(w, bx + k); x++) {
+            const c = cells.charCodeAt(y * w + x) - 48;
+            if (c === 6) normal++;
+            else if (c === 7) venom++;
+          }
+        }
+        if (normal + venom === 0) continue;
+        const sprite = mushroomSprite(venom > normal, iconSize);
+        const cx = (bx + k / 2) * scale, cy = (by + k / 2) * scale;
+        ctx.drawImage(sprite, cx - iconSize / 2, cy - iconSize / 2);
+      }
+    }
+  }
+
+  // 4) Un anneau autour de chaque nid.
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.8)';
+  ctx.lineWidth = 2;
+  for (const n of state.nests) {
+    ctx.beginPath();
+    ctx.arc((n.x + 0.5) * scale, (n.y + 0.5) * scale, 6 * scale, 0, 2 * Math.PI);
+    ctx.stroke();
+  }
+
+  // 5) Les fourmis, un petit carre chacune.
+  if ($('showAnts').checked) {
+    const size = Math.max(2, scale);
+    for (let i = 0; i < antData.length; i += 3) {
+      const kind = antData[i + 2];
+      const s = kind === 5 ? size * 2 : size; // les zombies sont plus visibles
+      ctx.fillStyle = ANT_COLORS[kind];
+      ctx.fillRect(antData[i] * scale - (s - size) / 2, antData[i + 1] * scale - (s - size) / 2, s, s);
+    }
+  }
+
+  // 6) Pluie.
+  if ($('showSky').checked && state.raining) {
+    ctx.strokeStyle = 'rgba(150, 190, 255, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 250; i++) {
+      const x = Math.random() * cw, y = Math.random() * ch;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 3, y + 10);
+    }
+    ctx.stroke();
+  }
+}
+requestAnimationFrame(draw);
+
+// --- Controles ---
+function post(url, params = {}) {
+  return fetch(url, { method: 'POST', body: new URLSearchParams(params) });
+}
+$('pause').onclick = () => post('/pause');
+$('restart').onclick = async () => {
+  const res = await post('/restart', {
+    w: $('wIn').value, h: $('hIn').value,
+    ants: $('antsIn').value, seed: $('seedIn').value,
+  });
+  const err = $('error');
+  err.textContent = res.ok ? '' : await res.text();
+  err.hidden = res.ok;
+};
+</script>
+</body>
+</html>

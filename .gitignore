@@ -1,0 +1,10 @@
+# Executables compiles
+*.exe
+*.test
+
+# Profils et sorties de benchmark
+*.out
+*.prof
+
+# Captures des tests navigateur
+.playwright-mcp/
