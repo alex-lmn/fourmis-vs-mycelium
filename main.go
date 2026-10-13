@@ -95,4 +95,7 @@ func runHeadless(w, h, ants int, seed int64, ticks int) {
 	fmt.Printf("GC : %d passages, pause totale %.2f ms, %.1f Mo alloues\n",
 		after.NumGC-before.NumGC, float64(after.PauseTotalNs-before.PauseTotalNs)/1e6,
 		float64(after.TotalAlloc-before.TotalAlloc)/1e6)
+	// Memoire reellement demandee au systeme (tas + piles + runtime).
+	fmt.Printf("RAM : %.1f Mo obtenus du systeme, tas en usage %.1f Mo\n",
+		float64(after.Sys)/1e6, float64(after.HeapInuse)/1e6)
 }
