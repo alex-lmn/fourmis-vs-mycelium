@@ -29,6 +29,7 @@ Pour une partie légère : `go run . -w 320 -h 200 -ants 1000`.
 ## Règles
 
 ### Fourmis
+
 - Deux castes : les **ouvrières** récoltent la forêt, les **soldates** chassent
   les champignons.
 - Une ouvrière récolte la forêt à côté d'elle (2 unités par voyage) et la
@@ -58,7 +59,9 @@ Pour une partie légère : `go run . -w 320 -h 200 -ants 1000`.
 - Quand il y a trop de fourmis au même endroit, elles s'écartent.
 
 ### Virus
+
 Le poison des champignons est un **virus contagieux**.
+
 - Une fourmi est contaminée en mangeant un champignon, en l'attaquant ou en
   passant tout près. Deux souches : **normale** et **venimeuse** (deux fois
   plus rapide et deux fois plus contagieuse).
@@ -83,6 +86,7 @@ Le poison des champignons est un **virus contagieux**.
   une salve de spores s'envole.
 
 ### Colonie (respawn)
+
 - **Chaque nid a sa reine** : chacune pond un œuf tous les 4 ticks quand la
   réserve le permet. Les reines gardent une réserve pour nourrir les fourmis
   déjà nées (0,3 unité par fourmi). L'œuf **éclot après 300 ticks** : c'est le
@@ -94,6 +98,7 @@ Le poison des champignons est un **virus contagieux**.
   nids.
 
 ### Champignons
+
 - Deux espèces : **normal** (marron) et **venimeux** (violet). Ils ne bloquent
   pas le passage, mais leur contact est dangereux.
 - Un champignon adulte lâche des **spores** autour de lui. Elles germent mieux
@@ -111,20 +116,47 @@ Le poison des champignons est un **virus contagieux**.
 - Aucun champignon ne pousse près d'un nid.
 
 ### Monde
+
 - **Pluie** aléatoire : spores ×3 et phéromones effacées plus vite.
 - Les phéromones s'évaporent et se diffusent à chaque tick.
 
 ## Organisation du code
 
-| Fichier | Rôle |
-|---|---|
-| `world.go` | carte, génération de la forêt, météo, statistiques |
-| `ant.go` | comportement des fourmis, nids, ponte |
-| `fungus.go` | propagation des champignons |
-| `virus.go` | virus contagieux, soins, zombies |
-| `pheromone.go` | évaporation et diffusion des phéromones |
-| `server.go` | serveur web, envoi de l'état au navigateur (SSE) |
-| `web/index.html` | affichage de la carte et des statistiques |
+| Fichier          | Rôle                                               |
+| ---------------- | -------------------------------------------------- |
+| `world.go`       | carte, génération de la forêt, météo, statistiques |
+| `ant.go`         | comportement des fourmis, nids, ponte              |
+| `fungus.go`      | propagation des champignons                        |
+| `virus.go`       | virus contagieux, soins, zombies                   |
+| `pheromone.go`   | évaporation et diffusion des phéromones            |
+| `server.go`      | serveur web, envoi de l'état au navigateur (SSE)   |
+| `bench_test.go`  | benchmark déterministe de `updateSimulation()`     |
+| `web/index.html` | affichage de la carte et des statistiques          |
+
+## Benchmark
+
+Toutes les mesures en une commande (Git Bash) :
+
+```bash
+./run_benchmarks.sh          # baseline
+./run_benchmarks.sh v3       # nouvelle version, comparée à la baseline
+```
+
+Prérequis : `benchstat` (`go install golang.org/x/perf/cmd/benchstat@latest`)
+et `hyperfine`. Le benchmark seul :
+
+```bash
+go test -run=^$ -bench=BenchmarkUpdateSimulation -benchmem -benchtime=100x -count=10
+```
+
+Options utiles :
+- `go run . -headless -ticks 1000 -seed 42` : joue sans interface et affiche
+  le temps par tick ;
+- `go run . -pprof localhost:6060` : profils en direct sur
+  http://localhost:6060/debug/pprof/.
+
+Le script écrit les résultats bruts (benchmark, benchstat, profils pprof,
+hyperfine, latence P99) dans un dossier `results/` local, non versionné.
 
 ## Ce qui est volontairement lent (pistes d'optimisation)
 
