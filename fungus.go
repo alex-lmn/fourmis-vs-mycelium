@@ -96,9 +96,9 @@ func (w *World) stepFungus() {
 			}
 			// Les champignons marquent le danger autour d'eux.
 			if f.Kind == Venomous {
-				w.PherDanger[y][x] = math.Min(PherMax, w.PherDanger[y][x]+0.3)
+				w.PherDanger[y*w.W+x] = math.Min(PherMax, w.PherDanger[y*w.W+x]+0.3)
 			} else {
-				w.PherDanger[y][x] = math.Min(PherMax, w.PherDanger[y][x]+0.05)
+				w.PherDanger[y*w.W+x] = math.Min(PherMax, w.PherDanger[y*w.W+x]+0.05)
 			}
 		}
 	}
@@ -134,8 +134,9 @@ func (w *World) spore(x, y, parent int) {
 	if !w.inside(nx, ny) || w.Fungus[ny][nx].Kind != NoFungus || w.nearNest(nx, ny) {
 		return
 	}
-	// Une fourmi a cote ecrase la spore (on regarde toutes les fourmis).
-	for _, a := range w.Ants {
+	// Une fourmi a cote ecrase la spore. V4 : cellules voisines seulement.
+	for _, j := range w.near(nx, ny, 1) {
+		a := w.Ants[j]
 		if abs(a.X-nx) <= 1 && abs(a.Y-ny) <= 1 {
 			w.Stats.SporesCrushed++
 			return
@@ -192,8 +193,10 @@ func (w *World) fungusAura() {
 
 // fungusLife : regle du jeu de la vie sur la couche des champignons.
 func (w *World) fungusLife() {
-	count := newGridInt(w.W, w.H)
-	venom := newGridInt(w.W, w.H)
+	// V3 : tableaux plats reutilises d'un appel a l'autre, remis a zero.
+	count, venom := w.lifeCount, w.lifeVenom
+	clear(count)
+	clear(venom)
 	for y := 0; y < w.H; y++ {
 		for x := 0; x < w.W; x++ {
 			for d := 0; d < 8; d++ {
@@ -203,10 +206,10 @@ func (w *World) fungusLife() {
 				}
 				switch w.Fungus[ny][nx].Kind {
 				case Mushroom:
-					count[y][x]++
+					count[y*w.W+x]++
 				case Venomous:
-					count[y][x]++
-					venom[y][x]++
+					count[y*w.W+x]++
+					venom[y*w.W+x]++
 				}
 			}
 		}
@@ -214,7 +217,7 @@ func (w *World) fungusLife() {
 
 	for y := 0; y < w.H; y++ {
 		for x := 0; x < w.W; x++ {
-			n := count[y][x]
+			n := count[y*w.W+x]
 			if w.Fungus[y][x].Kind != NoFungus {
 				if n >= SuffocateAt {
 					w.Fungus[y][x] = Fungus{} // etouffe
@@ -222,7 +225,7 @@ func (w *World) fungusLife() {
 				}
 			} else if n == 3 && !w.nearNest(x, y) && w.rng.Float64() < LifeBirthChance {
 				kind := Mushroom
-				if venom[y][x] >= 2 {
+				if venom[y*w.W+x] >= 2 {
 					kind = Venomous
 				}
 				w.Fungus[y][x] = w.newFungus(kind)
@@ -232,9 +235,10 @@ func (w *World) fungusLife() {
 	}
 }
 
-// antAt : une fourmi est-elle sur cette case ? (parcours de toutes les fourmis)
+// antAt : une fourmi est-elle sur cette case ? V4 : sa cellule seulement.
 func (w *World) antAt(x, y int) bool {
-	for _, a := range w.Ants {
+	for _, j := range w.near(x, y, 0) {
+		a := w.Ants[j]
 		if a.X == x && a.Y == y {
 			return true
 		}

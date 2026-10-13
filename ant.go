@@ -79,7 +79,9 @@ type Ant struct {
 	// Exploration : foret lointaine visee quand elle ne voit rien autour d'elle.
 	Exploring    bool
 	GoalX, GoalY int
-	Carry        int // nourriture transportee
+	idx          int32 // indice dans w.Ants (grille spatiale, V4)
+	cell         int32 // cellule de la grille spatiale (V4)
+	Carry        int   // nourriture transportee
 	Age          int
 	MaxAge       int
 	Alarm        int // > 0 : fourmi en alerte
@@ -107,6 +109,7 @@ func (w *World) spawnAnt(soldier bool, nest *Nest) {
 }
 
 func (w *World) stepAnts() {
+	w.rebuildGrid() // V4 : des fourmis sont nees depuis le dernier tick
 	w.propagateAlarm()
 	w.spreadVirus()
 	w.groom()
@@ -117,7 +120,10 @@ func (w *World) stepAnts() {
 		}
 	}
 
-	survivors := make([]*Ant, 0, len(w.Ants))
+	// V3 : les survivantes sont copiees dans un second tableau reutilise, puis
+	// les deux tableaux sont echanges. On ne compacte pas w.Ants sur place :
+	// killAnt parcourt w.Ants (nuage toxique) pendant cette boucle.
+	survivors := w.antsSpare[:0]
 	for _, a := range w.Ants {
 		if a.Dead {
 			w.killAnt(a)
@@ -125,17 +131,22 @@ func (w *World) stepAnts() {
 			survivors = append(survivors, a)
 		}
 	}
+	clear(w.Ants) // l'ancien tableau ne retient plus les fourmis mortes
+	w.antsSpare = w.Ants
 	w.Ants = survivors
+	w.rebuildGrid() // V4 : les mortes sortent de la grille (spores, repousse)
 }
 
-// propagateAlarm : chaque fourmi en alerte previent toutes les fourmis
-// proches (on compare chaque fourmi a toutes les autres).
+// propagateAlarm : chaque fourmi en alerte previent les fourmis proches.
+// V4 : on ne lit que les fourmis des cellules voisines (chaque voisine est
+// traitee independamment, l'ordre ne compte pas).
 func (w *World) propagateAlarm() {
 	for _, a := range w.Ants {
 		if a.Alarm <= 5 {
 			continue
 		}
-		for _, b := range w.Ants {
+		for _, j := range w.near(a.X, a.Y, AlarmRadius) {
+			b := w.Ants[j]
 			if b == a || b.Alarm >= a.Alarm-5 {
 				continue
 			}
@@ -214,13 +225,13 @@ func (w *World) depositPheromones(a *Ant) {
 	x, y := a.X, a.Y
 	if !a.Soldier {
 		if a.Carry > 0 {
-			w.PherFood[y][x] = math.Min(PherMax, w.PherFood[y][x]+1.0)
+			w.PherFood[y*w.W+x] = math.Min(PherMax, w.PherFood[y*w.W+x]+1.0)
 		} else {
-			w.PherHome[y][x] = math.Min(PherMax, w.PherHome[y][x]+0.4)
+			w.PherHome[y*w.W+x] = math.Min(PherMax, w.PherHome[y*w.W+x]+0.4)
 		}
 	}
 	if a.Virus > 0.2 || a.Alarm > 10 {
-		w.PherDanger[y][x] = math.Min(PherMax, w.PherDanger[y][x]+0.6)
+		w.PherDanger[y*w.W+x] = math.Min(PherMax, w.PherDanger[y*w.W+x]+0.6)
 	}
 }
 
@@ -263,14 +274,14 @@ func (w *World) workerAct(a *Ant) {
 	w.move(a, func(nx, ny int) float64 {
 		s := 0.0
 		if returning {
-			s += 1.6*(w.distNest(a.X, a.Y)-w.distNest(nx, ny)) + 0.2*w.PherHome[ny][nx]
+			s += 1.6*(w.distNest(a.X, a.Y)-w.distNest(nx, ny)) + 0.2*w.PherHome[ny*w.W+nx]
 		} else {
-			s += 0.8*w.PherFood[ny][nx] - 0.05*w.PherHome[ny][nx]
+			s += 0.8*w.PherFood[ny*w.W+nx] - 0.05*w.PherHome[ny*w.W+nx]
 			if hasTarget {
 				s += 1.2 * (dist(a.X, a.Y, tx, ty) - dist(nx, ny, tx, ty))
 			}
 		}
-		s -= fear * w.PherDanger[ny][nx]
+		s -= fear * w.PherDanger[ny*w.W+nx]
 		return s
 	})
 }
@@ -317,7 +328,7 @@ func (w *World) soldierAct(a *Ant) {
 	far := w.distNest(a.X, a.Y) > leash
 
 	w.move(a, func(nx, ny int) float64 {
-		s := 0.6 * w.PherDanger[ny][nx]
+		s := 0.6 * w.PherDanger[ny*w.W+nx]
 		if returning || (far && !hasTarget) {
 			s += 1.6 * (w.distNest(a.X, a.Y) - w.distNest(nx, ny))
 		}
@@ -358,11 +369,16 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 	a.X += dx8[best]
 	a.Y += dy8[best]
 	a.Dir = best
+	w.moveInGrid(a) // V4 : la grille suit la fourmi
 }
 
+// isCrowded : plus de CrowdLimit fourmis a CrowdRadius cases ou moins ?
+// V1 : arret des que la limite est depassee. V4 : seulement les cellules
+// voisines (on compte, l'ordre ne compte pas).
 func (w *World) isCrowded(a *Ant) bool {
 	n := 0
-	for _, b := range w.Ants {
+	for _, j := range w.near(a.X, a.Y, CrowdRadius) {
+		b := w.Ants[j]
 		if b != a && abs(b.X-a.X) <= CrowdRadius && abs(b.Y-a.Y) <= CrowdRadius {
 			n++
 			if n > CrowdLimit {
@@ -502,16 +518,19 @@ func (w *World) attackMushroom(a *Ant, x, y int) {
 	}
 }
 
-// nearestZombie : zombie la plus proche dans un rayon r (on parcourt toutes
-// les fourmis).
+// nearestZombie : zombie la plus proche dans un rayon r.
+// V4 : cellules voisines seulement. A distance egale, on garde le plus petit
+// indice : c'est le meme choix que la boucle naive (premiere trouvee), sans
+// avoir a trier les voisines.
 func (w *World) nearestZombie(a *Ant, r int) (*Ant, bool) {
 	var best *Ant
 	bestDist := math.Inf(1)
-	for _, b := range w.Ants {
+	for _, j := range w.near(a.X, a.Y, r) {
+		b := w.Ants[j]
 		if b == a || b.Dead || !b.Zombie() || abs(b.X-a.X) > r || abs(b.Y-a.Y) > r {
 			continue
 		}
-		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist {
+		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist || (d == bestDist && b.idx < best.idx) {
 			best, bestDist = b, d
 		}
 	}
@@ -539,7 +558,7 @@ func (w *World) killAnt(a *Ant) {
 	case "old":
 		w.Stats.DeadOld++
 	}
-	w.PherDanger[a.Y][a.X] = PherMax
+	w.PherDanger[a.Y*w.W+a.X] = PherMax
 
 	if a.Virus > 0 {
 		if w.nearNest(a.X, a.Y) {
@@ -590,7 +609,7 @@ func (w *World) stepNest() {
 // toute la carte (parcours complet de la grille). Les ouvrieres qui ne voient
 // plus de foret partent vers l'une d'elles.
 func (w *World) rememberForest() {
-	var all [][2]int
+	all := w.forestScratch[:0] // V3 : tampon reutilise
 	for y := 0; y < w.H; y++ {
 		for x := 0; x < w.W; x++ {
 			if w.Food[y][x] > 0 {
@@ -598,6 +617,7 @@ func (w *World) rememberForest() {
 			}
 		}
 	}
+	w.forestScratch = all
 	w.ForestMemory = w.ForestMemory[:0]
 	for i := 0; i < MemorySize && len(all) > 0; i++ {
 		w.ForestMemory = append(w.ForestMemory, all[w.rng.Intn(len(all))])

@@ -27,7 +27,10 @@
 //     croque-mortes (voir killAnt).
 package main
 
-import "math"
+import (
+	"math"
+	"slices"
+)
 
 const (
 	InfectLoad      = 0.05   // charge d'une contamination par contact
@@ -121,11 +124,23 @@ func (w *World) spreadVirus() {
 		if a.Zombie() {
 			rate *= 2
 		}
-		for _, b := range w.Ants {
+		// V4 : on garde les fourmis collees (cellules voisines), puis on trie
+		// ce petit groupe par indice pour tirer les nombres aleatoires dans le
+		// meme ordre que la boucle naive.
+		touching := w.touchBuf[:0]
+		for _, j := range w.near(a.X, a.Y, 1) {
+			if b := w.Ants[j]; abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 {
+				touching = append(touching, j)
+			}
+		}
+		slices.Sort(touching)
+		w.touchBuf = touching
+		for _, j := range touching {
+			b := w.Ants[j]
 			if b == a || b.Virus > 0 || b.Immune > 0 {
 				continue
 			}
-			if abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 && w.rng.Float64() < rate {
+			if w.rng.Float64() < rate {
 				w.infect(b, InfectLoad, a.Venom, false)
 			}
 		}
@@ -141,7 +156,8 @@ func (w *World) groom() {
 			continue
 		}
 		helpers := 0
-		for _, b := range w.Ants {
+		for _, j := range w.near(a.X, a.Y, 1) { // V4 : on compte, l'ordre ne compte pas
+			b := w.Ants[j]
 			if b != a && b.Virus == 0 && abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 {
 				helpers++
 				if helpers == GroomMax {
@@ -194,11 +210,13 @@ func (w *World) zombieAct(a *Ant) {
 func (w *World) nearestHealthy(a *Ant, r int) (*Ant, bool) {
 	var best *Ant
 	bestDist := math.Inf(1)
-	for _, b := range w.Ants {
+	// V4 : cellules voisines ; a distance egale, plus petit indice (= boucle naive).
+	for _, j := range w.near(a.X, a.Y, r) {
+		b := w.Ants[j]
 		if b == a || b.Virus > 0 || b.Immune > 0 || abs(b.X-a.X) > r || abs(b.Y-a.Y) > r {
 			continue
 		}
-		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist {
+		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist || (d == bestDist && b.idx < best.idx) {
 			best, bestDist = b, d
 		}
 	}
@@ -209,7 +227,8 @@ func (w *World) nearestHealthy(a *Ant, r int) (*Ant, bool) {
 // puis un champignon pousse a sa place et des spores s'envolent.
 func (w *World) virusCorpse(a *Ant) {
 	// Nuage toxique : on parcourt toutes les fourmis. L'immunite ne protege pas.
-	for _, b := range w.Ants {
+	for _, j := range w.near(a.X, a.Y, DeathRadius) { // V4 : chaque voisine independante
+		b := w.Ants[j]
 		if b == a || b.Dead || abs(b.X-a.X) > DeathRadius || abs(b.Y-a.Y) > DeathRadius {
 			continue
 		}

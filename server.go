@@ -140,9 +140,9 @@ func (s *Server) publish() {
 				c = 9
 			}
 			cells.WriteByte(byte('0' + c))
-			phFood.WriteByte(level(w.PherFood[y][x]))
-			phHome.WriteByte(level(w.PherHome[y][x]))
-			phDanger.WriteByte(level(w.PherDanger[y][x]))
+			phFood.WriteByte(level(w.PherFood[y*w.W+x]))
+			phHome.WriteByte(level(w.PherHome[y*w.W+x]))
+			phDanger.WriteByte(level(w.PherDanger[y*w.W+x]))
 		}
 	}
 

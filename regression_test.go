@@ -34,7 +34,7 @@ func fingerprint(w *World) string {
 		for x := 0; x < w.W; x++ {
 			f := w.Fungus[y][x]
 			put(w.Food[y][x], f.Kind, f.Age, w.Mycelium[y][x],
-				math.Float64bits(w.PherFood[y][x]), math.Float64bits(w.PherDanger[y][x]))
+				math.Float64bits(w.PherFood[y*w.W+x]), math.Float64bits(w.PherDanger[y*w.W+x]))
 		}
 	}
 	return fmt.Sprintf("%016x", h.Sum64())
