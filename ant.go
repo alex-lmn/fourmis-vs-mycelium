@@ -117,7 +117,10 @@ func (w *World) stepAnts() {
 		}
 	}
 
-	survivors := make([]*Ant, 0, len(w.Ants))
+	// V3 : les survivantes sont copiees dans un second tableau reutilise, puis
+	// les deux tableaux sont echanges. On ne compacte pas w.Ants sur place :
+	// killAnt parcourt w.Ants (nuage toxique) pendant cette boucle.
+	survivors := w.antsSpare[:0]
 	for _, a := range w.Ants {
 		if a.Dead {
 			w.killAnt(a)
@@ -125,6 +128,8 @@ func (w *World) stepAnts() {
 			survivors = append(survivors, a)
 		}
 	}
+	clear(w.Ants) // l'ancien tableau ne retient plus les fourmis mortes
+	w.antsSpare = w.Ants
 	w.Ants = survivors
 }
 
@@ -214,13 +219,13 @@ func (w *World) depositPheromones(a *Ant) {
 	x, y := a.X, a.Y
 	if !a.Soldier {
 		if a.Carry > 0 {
-			w.PherFood[y][x] = math.Min(PherMax, w.PherFood[y][x]+1.0)
+			w.PherFood[y*w.W+x] = math.Min(PherMax, w.PherFood[y*w.W+x]+1.0)
 		} else {
-			w.PherHome[y][x] = math.Min(PherMax, w.PherHome[y][x]+0.4)
+			w.PherHome[y*w.W+x] = math.Min(PherMax, w.PherHome[y*w.W+x]+0.4)
 		}
 	}
 	if a.Virus > 0.2 || a.Alarm > 10 {
-		w.PherDanger[y][x] = math.Min(PherMax, w.PherDanger[y][x]+0.6)
+		w.PherDanger[y*w.W+x] = math.Min(PherMax, w.PherDanger[y*w.W+x]+0.6)
 	}
 }
 
@@ -263,14 +268,14 @@ func (w *World) workerAct(a *Ant) {
 	w.move(a, func(nx, ny int) float64 {
 		s := 0.0
 		if returning {
-			s += 1.6*(w.distNest(a.X, a.Y)-w.distNest(nx, ny)) + 0.2*w.PherHome[ny][nx]
+			s += 1.6*(w.distNest(a.X, a.Y)-w.distNest(nx, ny)) + 0.2*w.PherHome[ny*w.W+nx]
 		} else {
-			s += 0.8*w.PherFood[ny][nx] - 0.05*w.PherHome[ny][nx]
+			s += 0.8*w.PherFood[ny*w.W+nx] - 0.05*w.PherHome[ny*w.W+nx]
 			if hasTarget {
 				s += 1.2 * (dist(a.X, a.Y, tx, ty) - dist(nx, ny, tx, ty))
 			}
 		}
-		s -= fear * w.PherDanger[ny][nx]
+		s -= fear * w.PherDanger[ny*w.W+nx]
 		return s
 	})
 }
@@ -317,7 +322,7 @@ func (w *World) soldierAct(a *Ant) {
 	far := w.distNest(a.X, a.Y) > leash
 
 	w.move(a, func(nx, ny int) float64 {
-		s := 0.6 * w.PherDanger[ny][nx]
+		s := 0.6 * w.PherDanger[ny*w.W+nx]
 		if returning || (far && !hasTarget) {
 			s += 1.6 * (w.distNest(a.X, a.Y) - w.distNest(nx, ny))
 		}
@@ -539,7 +544,7 @@ func (w *World) killAnt(a *Ant) {
 	case "old":
 		w.Stats.DeadOld++
 	}
-	w.PherDanger[a.Y][a.X] = PherMax
+	w.PherDanger[a.Y*w.W+a.X] = PherMax
 
 	if a.Virus > 0 {
 		if w.nearNest(a.X, a.Y) {
@@ -590,7 +595,7 @@ func (w *World) stepNest() {
 // toute la carte (parcours complet de la grille). Les ouvrieres qui ne voient
 // plus de foret partent vers l'une d'elles.
 func (w *World) rememberForest() {
-	var all [][2]int
+	all := w.forestScratch[:0] // V3 : tampon reutilise
 	for y := 0; y < w.H; y++ {
 		for x := 0; x < w.W; x++ {
 			if w.Food[y][x] > 0 {
@@ -598,6 +603,7 @@ func (w *World) rememberForest() {
 			}
 		}
 	}
+	w.forestScratch = all
 	w.ForestMemory = w.ForestMemory[:0]
 	for i := 0; i < MemorySize && len(all) > 0; i++ {
 		w.ForestMemory = append(w.ForestMemory, all[w.rng.Intn(len(all))])

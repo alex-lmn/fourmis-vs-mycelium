@@ -10,36 +10,42 @@ package main
 
 const PherMax = 10.0
 
+// V3 (zero allocation) : les grilles sont des tableaux plats de W*H cases
+// (case (x, y) a l'indice y*W+x). Un seul tampon de rechange, alloue une fois,
+// recoit le resultat de la diffusion ; on echange ensuite les deux tableaux
+// (double tampon). Plus aucune grille n'est creee pendant la partie.
 func (w *World) stepPheromones() {
 	rain := 1.0
 	if w.Raining {
 		rain = 0.98
 	}
-	w.PherFood = w.diffuse(w.PherFood, 0.05, 0.985*rain)
-	w.PherHome = w.diffuse(w.PherHome, 0.03, 0.993*rain)
-	w.PherDanger = w.diffuse(w.PherDanger, 0.10, 0.96*rain)
+	w.diffuse(w.PherFood, w.pherSpare, 0.05, 0.985*rain)
+	w.PherFood, w.pherSpare = w.pherSpare, w.PherFood
+	w.diffuse(w.PherHome, w.pherSpare, 0.03, 0.993*rain)
+	w.PherHome, w.pherSpare = w.pherSpare, w.PherHome
+	w.diffuse(w.PherDanger, w.pherSpare, 0.10, 0.96*rain)
+	w.PherDanger, w.pherSpare = w.pherSpare, w.PherDanger
 }
 
-// diffuse cree une nouvelle grille ou chaque case se rapproche de la
-// moyenne de ses voisines, puis s'evapore.
-func (w *World) diffuse(g [][]float64, rate, evap float64) [][]float64 {
-	next := newGridFloat(w.W, w.H)
+// diffuse ecrit dans next la grille g ou chaque case se rapproche de la
+// moyenne de ses voisines, puis s'evapore. Toutes les cases de next sont
+// ecrites : pas besoin de la remettre a zero.
+func (w *World) diffuse(g, next []float64, rate, evap float64) {
 	for y := 0; y < w.H; y++ {
 		for x := 0; x < w.W; x++ {
 			sum, n := 0.0, 0
 			for d := 0; d < 8; d++ {
 				nx, ny := x+dx8[d], y+dy8[d]
 				if w.inside(nx, ny) {
-					sum += g[ny][nx]
+					sum += g[ny*w.W+nx]
 					n++
 				}
 			}
-			v := (g[y][x]*(1-rate) + rate*sum/float64(n)) * evap
+			v := (g[y*w.W+x]*(1-rate) + rate*sum/float64(n)) * evap
 			if v < 0.001 {
 				v = 0
 			}
-			next[y][x] = v
+			next[y*w.W+x] = v
 		}
 	}
-	return next
 }
