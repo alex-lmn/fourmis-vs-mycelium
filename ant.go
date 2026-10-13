@@ -332,7 +332,7 @@ func (w *World) soldierAct(a *Ant) {
 // Elle prefere aller tout droit, avec un peu de hasard. Elle peut marcher sur
 // les champignons (mais leur aura peut la contaminer).
 func (w *World) move(a *Ant, score func(nx, ny int) float64) {
-	crowd := w.countNeighbours(a)
+	crowded := w.isCrowded(a)
 	best, bestScore := -1, math.Inf(-1)
 	for d := 0; d < 8; d++ {
 		nx, ny := a.X+dx8[d], a.Y+dy8[d]
@@ -344,7 +344,7 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 			turn = 8 - turn
 		}
 		s := score(nx, ny) - 0.3*float64(turn) + w.rng.Float64()*0.8
-		if crowd > CrowdLimit {
+		if crowded {
 			s += w.rng.Float64() * 2
 		}
 		if s > bestScore {
@@ -360,15 +360,17 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 	a.Dir = best
 }
 
-// countNeighbours : nombre de fourmis proches (on parcourt toutes les fourmis).
-func (w *World) countNeighbours(a *Ant) int {
+func (w *World) isCrowded(a *Ant) bool {
 	n := 0
 	for _, b := range w.Ants {
 		if b != a && abs(b.X-a.X) <= CrowdRadius && abs(b.Y-a.Y) <= CrowdRadius {
 			n++
+			if n > CrowdLimit {
+				return true
+			}
 		}
 	}
-	return n
+	return false
 }
 
 // adjacentFood : une case de foret sur la fourmi ou a cote d'elle. Elle
