@@ -134,8 +134,9 @@ func (w *World) spore(x, y, parent int) {
 	if !w.inside(nx, ny) || w.Fungus[ny][nx].Kind != NoFungus || w.nearNest(nx, ny) {
 		return
 	}
-	// Une fourmi a cote ecrase la spore (on regarde toutes les fourmis).
-	for _, a := range w.Ants {
+	// Une fourmi a cote ecrase la spore. V4 : cellules voisines seulement.
+	for _, j := range w.near(nx, ny, 1) {
+		a := w.Ants[j]
 		if abs(a.X-nx) <= 1 && abs(a.Y-ny) <= 1 {
 			w.Stats.SporesCrushed++
 			return
@@ -234,9 +235,10 @@ func (w *World) fungusLife() {
 	}
 }
 
-// antAt : une fourmi est-elle sur cette case ? (parcours de toutes les fourmis)
+// antAt : une fourmi est-elle sur cette case ? V4 : sa cellule seulement.
 func (w *World) antAt(x, y int) bool {
-	for _, a := range w.Ants {
+	for _, j := range w.near(x, y, 0) {
+		a := w.Ants[j]
 		if a.X == x && a.Y == y {
 			return true
 		}

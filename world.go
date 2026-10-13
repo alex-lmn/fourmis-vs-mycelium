@@ -94,9 +94,9 @@ type World struct {
 	rng  *rand.Rand
 	Tick int
 
-	Food       [][]int // nourriture de chaque case de foret (0 = sol nu)
-	Fungus     [][]Fungus
-	Mycelium   [][]int // tick de repousse d'un champignon detruit (0 = rien)
+	Food     [][]int // nourriture de chaque case de foret (0 = sol nu)
+	Fungus   [][]Fungus
+	Mycelium [][]int // tick de repousse d'un champignon detruit (0 = rien)
 	// Grilles de pheromones a plat (V3) : case (x, y) a l'indice y*W+x.
 	PherFood   []float64
 	PherHome   []float64
@@ -108,6 +108,12 @@ type World struct {
 	lifeVenom     []int    // fungusLife : nombre de venimeux voisins
 	antsSpare     []*Ant   // stepAnts : liste des survivantes
 	forestScratch [][2]int // rememberForest : cases de foret
+
+	// Grille spatiale (V4, voir spatial.go).
+	cells        [][]int32 // indices des fourmis de chaque cellule
+	gridW, gridH int
+	nearBuf      []int32 // resultat de near, reutilise
+	touchBuf     []int32 // spreadVirus : fourmis collees, reutilise
 
 	Nests []*Nest // le premier nid est au centre, les autres sont fondes en cours de partie
 	Stock float64 // nourriture stockee, partagee par tous les nids
@@ -167,6 +173,7 @@ func NewWorld(w, h, ants int, seed int64) *World {
 
 	wd.countAll()
 	wd.InitialForest = wd.ForestLeft
+	wd.rebuildGrid() // V4 : grille prete avant le premier tick
 	wd.recordHistory()
 	return wd
 }

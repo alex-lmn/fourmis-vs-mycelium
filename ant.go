@@ -79,7 +79,9 @@ type Ant struct {
 	// Exploration : foret lointaine visee quand elle ne voit rien autour d'elle.
 	Exploring    bool
 	GoalX, GoalY int
-	Carry        int // nourriture transportee
+	idx          int32 // indice dans w.Ants (grille spatiale, V4)
+	cell         int32 // cellule de la grille spatiale (V4)
+	Carry        int   // nourriture transportee
 	Age          int
 	MaxAge       int
 	Alarm        int // > 0 : fourmi en alerte
@@ -107,6 +109,7 @@ func (w *World) spawnAnt(soldier bool, nest *Nest) {
 }
 
 func (w *World) stepAnts() {
+	w.rebuildGrid() // V4 : des fourmis sont nees depuis le dernier tick
 	w.propagateAlarm()
 	w.spreadVirus()
 	w.groom()
@@ -131,16 +134,19 @@ func (w *World) stepAnts() {
 	clear(w.Ants) // l'ancien tableau ne retient plus les fourmis mortes
 	w.antsSpare = w.Ants
 	w.Ants = survivors
+	w.rebuildGrid() // V4 : les mortes sortent de la grille (spores, repousse)
 }
 
-// propagateAlarm : chaque fourmi en alerte previent toutes les fourmis
-// proches (on compare chaque fourmi a toutes les autres).
+// propagateAlarm : chaque fourmi en alerte previent les fourmis proches.
+// V4 : on ne lit que les fourmis des cellules voisines (chaque voisine est
+// traitee independamment, l'ordre ne compte pas).
 func (w *World) propagateAlarm() {
 	for _, a := range w.Ants {
 		if a.Alarm <= 5 {
 			continue
 		}
-		for _, b := range w.Ants {
+		for _, j := range w.near(a.X, a.Y, AlarmRadius) {
+			b := w.Ants[j]
 			if b == a || b.Alarm >= a.Alarm-5 {
 				continue
 			}
@@ -363,11 +369,16 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 	a.X += dx8[best]
 	a.Y += dy8[best]
 	a.Dir = best
+	w.moveInGrid(a) // V4 : la grille suit la fourmi
 }
 
+// isCrowded : plus de CrowdLimit fourmis a CrowdRadius cases ou moins ?
+// V1 : arret des que la limite est depassee. V4 : seulement les cellules
+// voisines (on compte, l'ordre ne compte pas).
 func (w *World) isCrowded(a *Ant) bool {
 	n := 0
-	for _, b := range w.Ants {
+	for _, j := range w.near(a.X, a.Y, CrowdRadius) {
+		b := w.Ants[j]
 		if b != a && abs(b.X-a.X) <= CrowdRadius && abs(b.Y-a.Y) <= CrowdRadius {
 			n++
 			if n > CrowdLimit {
@@ -507,16 +518,19 @@ func (w *World) attackMushroom(a *Ant, x, y int) {
 	}
 }
 
-// nearestZombie : zombie la plus proche dans un rayon r (on parcourt toutes
-// les fourmis).
+// nearestZombie : zombie la plus proche dans un rayon r.
+// V4 : cellules voisines seulement. A distance egale, on garde le plus petit
+// indice : c'est le meme choix que la boucle naive (premiere trouvee), sans
+// avoir a trier les voisines.
 func (w *World) nearestZombie(a *Ant, r int) (*Ant, bool) {
 	var best *Ant
 	bestDist := math.Inf(1)
-	for _, b := range w.Ants {
+	for _, j := range w.near(a.X, a.Y, r) {
+		b := w.Ants[j]
 		if b == a || b.Dead || !b.Zombie() || abs(b.X-a.X) > r || abs(b.Y-a.Y) > r {
 			continue
 		}
-		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist {
+		if d := dist(a.X, a.Y, b.X, b.Y); d < bestDist || (d == bestDist && b.idx < best.idx) {
 			best, bestDist = b, d
 		}
 	}
