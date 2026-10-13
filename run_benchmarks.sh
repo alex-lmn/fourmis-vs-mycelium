@@ -3,6 +3,7 @@
 #
 #   ./run_benchmarks.sh            mesure la version actuelle sous le nom "baseline"
 #   ./run_benchmarks.sh v3         mesure sous le nom "v3" et la compare a la baseline
+#   ./run_benchmarks.sh v3 v2      mesure "v3" et la compare a "v2"
 #
 # Prerequis : go, benchstat (go install golang.org/x/perf/cmd/benchstat@latest)
 # et hyperfine. Fermer le jeu et les applications lourdes avant de lancer.
@@ -33,8 +34,9 @@ go test -run='^$' -bench=BenchmarkUpdateSimulation -benchmem -benchtime=100x -co
 
 echo "== 2/4 Statistiques benchstat =="
 "$BENCHSTAT" "$OUT/bench_$LABEL.txt" | tee "$OUT/benchstat_$LABEL.txt"
-if [ "$LABEL" != "baseline" ] && [ -f "$OUT/bench_baseline.txt" ]; then
-	"$BENCHSTAT" "$OUT/bench_baseline.txt" "$OUT/bench_$LABEL.txt" | tee "$OUT/compare_$LABEL.txt"
+REF="${2:-baseline}" # version de reference (2e argument), baseline par defaut
+if [ "$LABEL" != "$REF" ] && [ -f "$OUT/bench_$REF.txt" ]; then
+	"$BENCHSTAT" "$OUT/bench_$REF.txt" "$OUT/bench_$LABEL.txt" | tee "$OUT/compare_$LABEL.txt"
 fi
 
 echo "== 3/4 Profils pprof (scenario Defaut) =="
