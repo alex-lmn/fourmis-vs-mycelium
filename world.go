@@ -112,8 +112,9 @@ type World struct {
 	// Grille spatiale (V4, voir spatial.go).
 	cells        [][]int32 // indices des fourmis de chaque cellule
 	gridW, gridH int
-	nearBuf      []int32 // resultat de near, reutilise
-	touchBuf     []int32 // spreadVirus : fourmis collees, reutilise
+	nearBuf      []int32  // resultat de near, reutilise
+	touchBuf     []int32  // spreadVirus : fourmis collees, reutilise
+	auraBuf      []uint64 // fungusAura (V6) : couples (case, fourmi), reutilise
 
 	Nests []*Nest // le premier nid est au centre, les autres sont fondes en cours de partie
 	Stock float64 // nourriture stockee, partagee par tous les nids
