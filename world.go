@@ -110,7 +110,7 @@ type World struct {
 	forestScratch [][2]int // rememberForest : cases de foret
 
 	// Grille spatiale (V4, voir spatial.go).
-	cells        [][]int32 // indices des fourmis de chaque cellule
+	cellMap      map[int][]*Ant // V5 : fourmis de chaque cellule (table de hachage)
 	gridW, gridH int
 	nearBuf      []int32 // resultat de near, reutilise
 	touchBuf     []int32 // spreadVirus : fourmis collees, reutilise
