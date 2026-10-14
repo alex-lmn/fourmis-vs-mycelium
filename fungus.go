@@ -139,7 +139,7 @@ func (w *World) spore(x, y, parent int) {
 	}
 	// Une fourmi a cote ecrase la spore. V4 : cellules voisines seulement.
 	for _, j := range w.near(nx, ny, 1) {
-		a := w.Ants[j]
+		a := &w.Ants[j]
 		if abs(a.X-nx) <= 1 && abs(a.Y-ny) <= 1 {
 			w.Stats.SporesCrushed++
 			return
@@ -173,7 +173,8 @@ func (w *World) spore(x, y, parent int) {
 // fourmi contaminee ne tire plus (comme avant, grace au test a.Virus == 0).
 func (w *World) fungusAura() {
 	pairs := w.auraBuf[:0]
-	for i, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		healthy := a.Virus == 0
 		for y := max(0, a.Y-2); y <= min(w.H-1, a.Y+2); y++ {
 			for x := max(0, a.X-2); x <= min(w.W-1, a.X+2); x++ {
@@ -201,7 +202,7 @@ func (w *World) fungusAura() {
 	w.auraBuf = pairs
 
 	for _, key := range pairs {
-		a := w.Ants[uint32(key)]
+		a := &w.Ants[uint32(key)]
 		if a.Virus != 0 {
 			continue // deja contaminee par un champignon precedent
 		}
@@ -267,7 +268,7 @@ func (w *World) fungusLife() {
 // antAt : une fourmi est-elle sur cette case ? V4 : sa cellule seulement.
 func (w *World) antAt(x, y int) bool {
 	for _, j := range w.near(x, y, 0) {
-		a := w.Ants[j]
+		a := &w.Ants[j]
 		if a.X == x && a.Y == y {
 			return true
 		}

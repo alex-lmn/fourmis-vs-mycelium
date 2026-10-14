@@ -27,7 +27,8 @@ func (w *World) rebuildGrid() {
 	for i := range w.cells {
 		w.cells[i] = w.cells[i][:0] // on garde la capacite : pas d'allocation
 	}
-	for i, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		a.idx = int32(i)
 		a.cell = int32(w.cellOf(a.X, a.Y))
 		w.cells[a.cell] = append(w.cells[a.cell], int32(i))

@@ -64,37 +64,53 @@ const (
 	MaxAnts        = 100000
 )
 
+// Ant : V7, champs ranges du plus grand au plus petit (pas de trou
+// d'alignement) et entiers reduits : 104 octets au lieu de 176. La structure
+// ne contient plus aucun pointeur (Cause est un code), donc le GC n'a pas a
+// parcourir le tableau des fourmis.
 type Ant struct {
-	ID      int
-	X, Y    int
-	Dir     int
-	Soldier bool
-	HP      float64
-	MaxHP   float64
-	Energy  float64
-	Virus   float64 // charge virale : 0 = saine, 1 = maximum
-	Venom   bool    // infectee par la souche venimeuse
-	Immune  int     // ticks d'immunite restants apres guerison
-	Resting bool    // malade : reste au nid jusqu'a guerison complete
+	HP     float64
+	MaxHP  float64
+	Energy float64
+	Virus  float64 // charge virale : 0 = saine, 1 = maximum
+	X, Y   int
 	// Exploration : foret lointaine visee quand elle ne voit rien autour d'elle.
-	Exploring    bool
 	GoalX, GoalY int
+	ID           int32
+	Immune       int32 // ticks d'immunite restants apres guerison
+	Carry        int32 // nourriture transportee
+	Age          int32
+	MaxAge       int32
+	Alarm        int32 // > 0 : fourmi en alerte
 	idx          int32 // indice dans w.Ants (grille spatiale, V4)
 	cell         int32 // cellule de la grille spatiale (V4)
-	Carry        int   // nourriture transportee
-	Age          int
-	MaxAge       int
-	Alarm        int // > 0 : fourmi en alerte
+	Dir          int8
+	Cause        uint8 // cause de la mort (CauseVirus, CauseStarve...)
+	Soldier      bool
+	Venom        bool // infectee par la souche venimeuse
+	Resting      bool // malade : reste au nid jusqu'a guerison complete
+	Exploring    bool
 	Dead         bool
-	Cause        string
 }
 
+// Causes de mort (V7 : un code d'un octet au lieu d'une chaine).
+const (
+	CauseNone uint8 = iota
+	CauseVirus
+	CauseStarve
+	CauseOld
+	CauseKilled // zombie eliminee par une soldate
+)
+
 func (w *World) spawnAnt(soldier bool, nest *Nest) {
-	a := &Ant{
-		ID: w.nextID, Soldier: soldier, Dir: w.rng.Intn(8),
-		Energy: MaxEnergy, MaxAge: 6000 + w.rng.Intn(5000),
+	// V7 : la fourmi est stockee par valeur dans w.Ants (tirages dans le
+	// meme ordre qu'avant : direction puis age maximal).
+	w.Ants = append(w.Ants, Ant{
+		ID: int32(w.nextID), Soldier: soldier, Dir: int8(w.rng.Intn(8)),
+		Energy: MaxEnergy, MaxAge: int32(6000 + w.rng.Intn(5000)),
 		MaxHP: WorkerHP,
-	}
+	})
+	a := &w.Ants[len(w.Ants)-1]
 	if soldier {
 		a.MaxHP = SoldierHP
 	}
@@ -104,7 +120,6 @@ func (w *World) spawnAnt(soldier bool, nest *Nest) {
 	a.X = min(w.W-1, max(0, nest.X+int(math.Cos(angle)*r)))
 	a.Y = min(w.H-1, max(0, nest.Y+int(math.Sin(angle)*r)))
 	w.nextID++
-	w.Ants = append(w.Ants, a)
 	w.Stats.Born++
 }
 
@@ -114,24 +129,30 @@ func (w *World) stepAnts() {
 	w.spreadVirus()
 	w.groom()
 
-	for _, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		if !a.Dead { // une zombie peut avoir ete eliminee plus tot dans le tick
 			w.updateAnt(a)
 		}
 	}
 
-	// V3 : les survivantes sont copiees dans un second tableau reutilise, puis
-	// les deux tableaux sont echanges. On ne compacte pas w.Ants sur place :
-	// killAnt parcourt w.Ants (nuage toxique) pendant cette boucle.
-	survivors := w.antsSpare[:0]
-	for _, a := range w.Ants {
-		if a.Dead {
+	// Les mortes d'abord : killAnt peut contaminer des voisines (nuage
+	// toxique), y compris des fourmis deja passees dans la boucle. V7 : les
+	// fourmis etant copiees par valeur, il faut que toutes les morts soient
+	// traitees avant de copier les survivantes.
+	for i := range w.Ants {
+		if a := &w.Ants[i]; a.Dead {
 			w.killAnt(a)
-		} else {
-			survivors = append(survivors, a)
 		}
 	}
-	clear(w.Ants) // l'ancien tableau ne retient plus les fourmis mortes
+	// V3 : les survivantes sont copiees dans un second tableau reutilise, puis
+	// les deux tableaux sont echanges (on ne compacte pas w.Ants sur place).
+	survivors := w.antsSpare[:0]
+	for i := range w.Ants {
+		if a := &w.Ants[i]; !a.Dead {
+			survivors = append(survivors, *a)
+		}
+	}
 	w.antsSpare = w.Ants
 	w.Ants = survivors
 	w.rebuildGrid() // V4 : les mortes sortent de la grille (spores, repousse)
@@ -141,12 +162,13 @@ func (w *World) stepAnts() {
 // V4 : on ne lit que les fourmis des cellules voisines (chaque voisine est
 // traitee independamment, l'ordre ne compte pas).
 func (w *World) propagateAlarm() {
-	for _, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		if a.Alarm <= 5 {
 			continue
 		}
 		for _, j := range w.near(a.X, a.Y, AlarmRadius) {
-			b := w.Ants[j]
+			b := &w.Ants[j]
 			if b == a || b.Alarm >= a.Alarm-5 {
 				continue
 			}
@@ -172,11 +194,11 @@ func (w *World) updateAnt(a *Ant) {
 
 	switch {
 	case a.HP <= 0:
-		a.Dead, a.Cause = true, "virus"
+		a.Dead, a.Cause = true, CauseVirus
 	case a.Energy <= 0:
-		a.Dead, a.Cause = true, "starve"
+		a.Dead, a.Cause = true, CauseStarve
 	case a.Age >= a.MaxAge:
-		a.Dead, a.Cause = true, "old"
+		a.Dead, a.Cause = true, CauseOld
 	}
 	if a.Dead {
 		return
@@ -350,7 +372,7 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 		if !w.inside(nx, ny) {
 			continue
 		}
-		turn := abs(d - a.Dir)
+		turn := abs(d - int(a.Dir))
 		if turn > 4 {
 			turn = 8 - turn
 		}
@@ -363,12 +385,12 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 		}
 	}
 	if best < 0 {
-		a.Dir = w.rng.Intn(8)
+		a.Dir = int8(w.rng.Intn(8))
 		return
 	}
 	a.X += dx8[best]
 	a.Y += dy8[best]
-	a.Dir = best
+	a.Dir = int8(best)
 	w.moveInGrid(a) // V4 : la grille suit la fourmi
 }
 
@@ -378,7 +400,7 @@ func (w *World) move(a *Ant, score func(nx, ny int) float64) {
 func (w *World) isCrowded(a *Ant) bool {
 	n := 0
 	for _, j := range w.near(a.X, a.Y, CrowdRadius) {
-		b := w.Ants[j]
+		b := &w.Ants[j]
 		if b != a && abs(b.X-a.X) <= CrowdRadius && abs(b.Y-a.Y) <= CrowdRadius {
 			n++
 			if n > CrowdLimit {
@@ -526,7 +548,7 @@ func (w *World) nearestZombie(a *Ant, r int) (*Ant, bool) {
 	var best *Ant
 	bestDist := math.Inf(1)
 	for _, j := range w.near(a.X, a.Y, r) {
-		b := w.Ants[j]
+		b := &w.Ants[j]
 		if b == a || b.Dead || !b.Zombie() || abs(b.X-a.X) > r || abs(b.Y-a.Y) > r {
 			continue
 		}
@@ -540,7 +562,7 @@ func (w *World) nearestZombie(a *Ant, r int) (*Ant, bool) {
 // killZombie : la soldate elimine proprement la zombie (pas de nuage toxique
 // ni de champignon). Elle risque un peu d'etre contaminee.
 func (w *World) killZombie(a, z *Ant) {
-	z.Dead, z.Cause = true, "killed"
+	z.Dead, z.Cause = true, CauseKilled
 	if w.rng.Float64() < AttackInfect*SoldierArmor {
 		w.infect(a, InfectLoad, z.Venom, false)
 	}
@@ -548,14 +570,14 @@ func (w *World) killZombie(a, z *Ant) {
 
 func (w *World) killAnt(a *Ant) {
 	switch a.Cause {
-	case "killed":
+	case CauseKilled:
 		w.Stats.ZombiesKilled++
 		return // eliminee par une soldate : rien ne pousse
-	case "virus":
+	case CauseVirus:
 		w.Stats.DeadVirus++
-	case "starve":
+	case CauseStarve:
 		w.Stats.DeadStarve++
-	case "old":
+	case CauseOld:
 		w.Stats.DeadOld++
 	}
 	w.PherDanger[a.Y*w.W+a.X] = PherMax
@@ -646,7 +668,8 @@ func (w *World) foundNest() {
 		return
 	}
 	var candidates []*Ant
-	for _, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		if a.Soldier || a.Carry == 0 || w.distNest(a.X, a.Y) < NestSpacing {
 			continue
 		}
@@ -668,7 +691,8 @@ func (w *World) foundNest() {
 // (de 12% a 40%).
 func (w *World) wantSoldier() bool {
 	soldiers := 0
-	for _, a := range w.Ants {
+	for i := range w.Ants {
+		a := &w.Ants[i]
 		if a.Soldier {
 			soldiers++
 		}
