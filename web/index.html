@@ -283,10 +283,60 @@ function cellColor(c) {
   }
 }
 
-// --- Reception de l'etat depuis le serveur (SSE) ---
-const es = new EventSource('/events');
-es.onmessage = e => { state = JSON.parse(e.data); updatePanels(); };
-es.onerror = () => { $('dot').className = 'dot off'; };
+// --- Reception de l'etat depuis le serveur (V11 : format binaire) ---
+// uint32 taille du JSON | JSON des statistiques | 4 grilles a 4 bits par
+// case (cases, pheromones nourriture / maison / danger) | 5 octets par fourmi.
+let bytesPerUpdate = 0;
+
+function unpack(bytes, offset, n) {
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i += 2) {
+    const b = bytes[offset + (i >> 1)];
+    out[i] = b & 15;
+    if (i + 1 < n) out[i + 1] = b >> 4;
+  }
+  return out;
+}
+
+function decode(buf) {
+  const view = new DataView(buf), bytes = new Uint8Array(buf);
+  const headLen = view.getUint32(0, true);
+  const s = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + headLen)));
+  const n = s.w * s.h, grid = Math.ceil(n / 2);
+  let off = 4 + headLen;
+  s.cells = unpack(bytes, off, n); off += grid;
+  s.phFood = unpack(bytes, off, n); off += grid;
+  s.phHome = unpack(bytes, off, n); off += grid;
+  s.phDanger = unpack(bytes, off, n); off += grid;
+  const ants = new Int32Array(s.ants * 3);
+  for (let i = 0; i < s.ants; i++, off += 5) {
+    ants[i * 3] = view.getUint16(off, true);
+    ants[i * 3 + 1] = view.getUint16(off + 2, true);
+    ants[i * 3 + 2] = bytes[off + 4];
+  }
+  s.antData = ants;
+  return s;
+}
+
+// Une seule requete a la fois ; ?v= demande au serveur d'attendre la
+// version suivante plutot que de renvoyer la meme.
+async function poll() {
+  let version = '';
+  for (;;) {
+    try {
+      const res = await fetch('/state?v=' + version, { cache: 'no-store' });
+      version = res.headers.get('X-Version') || '';
+      const buf = await res.arrayBuffer();
+      bytesPerUpdate = buf.byteLength;
+      state = decode(buf);
+      updatePanels();
+    } catch (e) {
+      $('dot').className = 'dot off';
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+poll();
 
 const fmt = n => Math.round(n).toLocaleString('fr-FR');
 function set(id, v) { $(id).textContent = v; }
@@ -297,7 +347,7 @@ function updatePanels() {
   $('pause').textContent = s.paused ? 'REPRENDRE' : 'PAUSE';
   set('seed', s.seed);
   set('tps', Math.round(s.tps));
-  set('tick', 'tick ' + fmt(s.tick));
+  set('tick', 'tick ' + fmt(s.tick) + ' · ' + fmt(bytesPerUpdate / 1024) + ' Ko par envoi');
 
   if (!formInit) {
     $('wIn').value = s.w;
@@ -465,11 +515,11 @@ function render() {
   const img = tctx.createImageData(w, h);
   const px = img.data;
   for (let i = 0; i < w * h; i++) {
-    const base = cellColor(cells.charCodeAt(i) - 48);
+    const base = cellColor(cells[i]);
     let r = base[0], g = base[1], b = base[2];
-    if (showFood) { const l = phFood.charCodeAt(i) - 48; g += l * 10; b += l * 18; }
-    if (showHome) { const l = phHome.charCodeAt(i) - 48; b += l * 10; }
-    if (showDanger) { const l = phDanger.charCodeAt(i) - 48; r += l * 20; }
+    if (showFood) { const l = phFood[i]; g += l * 10; b += l * 18; }
+    if (showHome) { const l = phHome[i]; b += l * 10; }
+    if (showDanger) { const l = phDanger[i]; r += l * 20; }
     px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255;
   }
   tctx.putImageData(img, 0, 0);
@@ -493,7 +543,7 @@ function render() {
         let normal = 0, venom = 0;
         for (let y = by; y < Math.min(h, by + k); y++) {
           for (let x = bx; x < Math.min(w, bx + k); x++) {
-            const c = cells.charCodeAt(y * w + x) - 48;
+            const c = cells[y * w + x];
             if (c === 6) normal++;
             else if (c === 7) venom++;
           }

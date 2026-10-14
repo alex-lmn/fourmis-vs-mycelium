@@ -1,17 +1,28 @@
-// Serveur web : fait tourner la simulation le plus vite possible et diffuse
-// l'etat complet au navigateur via Server-Sent Events (SSE).
+// Serveur web : fait tourner la simulation le plus vite possible et sert le
+// dernier etat au navigateur.
+//
+// V11 :
+//   - RCU : l'etat encode est publie dans un atomic.Pointer ; les clients le
+//     lisent sans verrou, la simulation n'attend jamais le reseau ;
+//   - decouplage : l'etat n'est encode qu'au plus 60 fois par seconde, pas a
+//     chaque tick ;
+//   - format binaire : statistiques en JSON + grilles a 4 bits par case +
+//     fourmis sur 5 octets, au lieu d'un JSON texte d'environ 1 Mo ;
+//   - tampon de construction recycle avec sync.Pool.
 package main
 
 import (
+	"bytes"
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"math"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,7 +34,10 @@ type Config struct {
 	Ants int
 }
 
-// Snapshot : tout ce qui est envoye au navigateur a chaque tick.
+// PublishEvery : intervalle minimum entre deux encodages (60 par seconde).
+const PublishEvery = time.Second / 60
+
+// Snapshot : statistiques envoyees en JSON en tete de chaque etat binaire.
 type Snapshot struct {
 	Seed   int64   `json:"seed"`
 	W      int     `json:"w"`
@@ -53,23 +67,18 @@ type Snapshot struct {
 	Stats         Stats   `json:"stats"`
 
 	History []HistPoint `json:"history"`
+}
 
-	// Un caractere par case, code 48 + valeur :
-	//   cells    : 0 sol, 1..5 foret, 6 champignon, 7 venimeux, 8 nid, 9 mycelium
-	//   phFood, phHome, phDanger : intensite 0..9
-	Cells    string `json:"cells"`
-	PhFood   string `json:"phFood"`
-	PhHome   string `json:"phHome"`
-	PhDanger string `json:"phDanger"`
-
-	// 3 nombres par fourmi : x, y, type
-	// (0 ouvriere, 1 ouvriere chargee, 2 soldate, 3 infectee, 4 infectee souche
-	// venimeuse, 5 zombie, 6 immunisee)
-	AntData []int `json:"antData"`
+// frame : un etat publie. Jamais modifie apres publication (RCU) : un
+// lecteur peut l'envoyer pendant que la simulation en prepare un autre.
+type frame struct {
+	version uint64
+	data    []byte
+	next    chan struct{} // ferme quand une version plus recente est publiee
 }
 
 type Server struct {
-	mu sync.Mutex
+	mu sync.Mutex // protege world, paused et cfg (simulation, pause, restart)
 
 	cfg    Config
 	world  *World
@@ -77,9 +86,13 @@ type Server struct {
 	tps    float64
 	paused bool
 
-	latest []byte        // dernier snapshot encode en JSON
-	notify chan struct{} // ferme puis recree a chaque nouveau snapshot
+	current     atomic.Pointer[frame] // dernier etat publie, lu sans verrou
+	version     uint64
+	lastPublish time.Time
 }
+
+// buildPool : tampons de construction recycles d'un encodage a l'autre.
+var buildPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 func Validate(w, h, ants int) error {
 	if w < MinSize || w > MaxSize || h < MinSize || h > MaxSize {
@@ -92,7 +105,8 @@ func Validate(w, h, ants int) error {
 }
 
 func NewServer(cfg Config, seed int64) *Server {
-	s := &Server{notify: make(chan struct{})}
+	s := &Server{}
+	s.current.Store(&frame{next: make(chan struct{})})
 	s.reset(seed, cfg)
 	return s
 }
@@ -110,45 +124,75 @@ func (s *Server) reset(seed int64, cfg Config) {
 	s.publish()
 }
 
-// publish encode tout l'etat du monde et reveille les clients connectes.
+// publish encode l'etat du monde au format binaire et le publie.
 // A appeler avec s.mu verrouille.
+//
+// Format (petit-boutiste) :
+//
+//	uint32  taille du JSON des statistiques, puis ce JSON
+//	4 grilles W*H a 4 bits par case (2 cases par octet) :
+//	  cases (0 sol, 1..5 foret, 6 champignon, 7 venimeux, 8 nid, 9 mycelium),
+//	  pheromones nourriture, maison, danger (intensite 0..9)
+//	5 octets par fourmi : x uint16, y uint16, type uint8
 func (s *Server) publish() {
 	w := s.world
-	n := w.W * w.H
-	var cells, phFood, phHome, phDanger strings.Builder
-	cells.Grow(n)
-	phFood.Grow(n)
-	phHome.Grow(n)
-	phDanger.Grow(n)
+	buf := buildPool.Get().(*bytes.Buffer)
+	buf.Reset()
 
-	level := func(v float64) byte {
-		return byte('0' + min(9, int(math.Ceil(v*1.5))))
+	head, err := json.Marshal(Snapshot{
+		Seed: s.seed, W: w.W, H: w.H, Tick: w.Tick, TPS: s.tps, Paused: s.paused, Result: w.Result,
+		Raining: w.Raining,
+		Ants:    len(w.Ants), Workers: w.Workers, Soldiers: w.Soldiers, Carrying: w.Carrying,
+		Eggs: len(w.Eggs), Stock: w.Stock, Nests: w.Nests,
+		Infected: w.Infected, Zombies: w.Zombies, Immune: w.ImmuneN,
+		ForestLeft: w.ForestLeft, InitialForest: w.InitialForest,
+		Mushrooms: w.Mushrooms, Venomous: w.VenomousN, Mycelium: w.MyceliumN,
+		Stats: w.Stats, History: w.History,
+	})
+	if err != nil {
+		buildPool.Put(buf)
+		return
 	}
-	for y := 0; y < w.H; y++ {
-		for x := 0; x < w.W; x++ {
-			var c int
-			switch {
-			case w.inNest(x, y):
-				c = 8
-			case w.Fungus[y][x].Kind == Mushroom:
-				c = 6
-			case w.Fungus[y][x].Kind == Venomous:
-				c = 7
-			case w.Food[y][x] > 0:
-				c = w.Food[y][x]
-			case w.Mycelium[y][x] > 0:
-				c = 9
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], uint32(len(head)))
+	buf.Write(u32[:])
+	buf.Write(head)
+
+	level := func(v float64) byte { return byte(min(9, int(math.Ceil(v*1.5)))) }
+	cell := func(x, y int) byte {
+		switch {
+		case w.inNest(x, y):
+			return 8
+		case w.Fungus[y][x].Kind == Mushroom:
+			return 6
+		case w.Fungus[y][x].Kind == Venomous:
+			return 7
+		case w.Food[y][x] > 0:
+			return byte(w.Food[y][x])
+		case w.Mycelium[y][x] > 0:
+			return 9
+		}
+		return 0
+	}
+	n := w.W * w.H
+	// Une grille a 4 bits par case : case paire dans les 4 bits faibles.
+	packed := func(get func(i int) byte) {
+		for i := 0; i < n; i += 2 {
+			b := get(i)
+			if i+1 < n {
+				b |= get(i+1) << 4
 			}
-			cells.WriteByte(byte('0' + c))
-			phFood.WriteByte(level(w.PherFood[y*w.W+x]))
-			phHome.WriteByte(level(w.PherHome[y*w.W+x]))
-			phDanger.WriteByte(level(w.PherDanger[y*w.W+x]))
+			buf.WriteByte(b)
 		}
 	}
+	packed(func(i int) byte { return cell(i%w.W, i/w.W) })
+	packed(func(i int) byte { return level(w.PherFood[i]) })
+	packed(func(i int) byte { return level(w.PherHome[i]) })
+	packed(func(i int) byte { return level(w.PherDanger[i]) })
 
-	ants := make([]int, 0, len(w.Ants)*3)
+	var rec [5]byte
 	for _, a := range w.Ants {
-		kind := 0
+		kind := byte(0)
 		switch {
 		case a.Zombie():
 			kind = 5
@@ -163,31 +207,25 @@ func (s *Server) publish() {
 		case a.Carry > 0:
 			kind = 1
 		}
-		ants = append(ants, a.X, a.Y, kind)
+		binary.LittleEndian.PutUint16(rec[0:], uint16(a.X))
+		binary.LittleEndian.PutUint16(rec[2:], uint16(a.Y))
+		rec[4] = kind
+		buf.Write(rec[:])
 	}
 
-	snap := Snapshot{
-		Seed: s.seed, W: w.W, H: w.H, Tick: w.Tick, TPS: s.tps, Paused: s.paused, Result: w.Result,
-		Raining: w.Raining,
-		Ants:    len(w.Ants), Workers: w.Workers, Soldiers: w.Soldiers, Carrying: w.Carrying,
-		Eggs: len(w.Eggs), Stock: w.Stock, Nests: w.Nests,
-		Infected: w.Infected, Zombies: w.Zombies, Immune: w.ImmuneN,
-		ForestLeft: w.ForestLeft, InitialForest: w.InitialForest,
-		Mushrooms: w.Mushrooms, Venomous: w.VenomousN, Mycelium: w.MyceliumN,
-		Stats: w.Stats, History: w.History,
-		Cells: cells.String(), PhFood: phFood.String(), PhHome: phHome.String(), PhDanger: phDanger.String(),
-		AntData: ants,
-	}
-	data, err := json.Marshal(snap)
-	if err != nil {
-		return
-	}
-	s.latest = data
-	close(s.notify)
-	s.notify = make(chan struct{})
+	// La trame publiee doit rester immuable : on copie le tampon recycle.
+	data := bytes.Clone(buf.Bytes())
+	buildPool.Put(buf)
+
+	s.version++
+	old := s.current.Load()
+	s.current.Store(&frame{version: s.version, data: data, next: make(chan struct{})})
+	close(old.next) // reveille les clients en attente d'une nouvelle version
+	s.lastPublish = time.Now()
 }
 
-// Run : boucle principale, sans aucune pause : un tick puis on publie, en boucle.
+// Run : boucle principale. La simulation tourne sans pause ; l'etat n'est
+// encode qu'au plus 60 fois par seconde (V11).
 func (s *Server) Run() {
 	ticks := 0
 	last := time.Now()
@@ -204,7 +242,9 @@ func (s *Server) Run() {
 			ticks = 0
 			last = time.Now()
 		}
-		s.publish()
+		if time.Since(s.lastPublish) >= PublishEvery {
+			s.publish()
+		}
 		s.mu.Unlock()
 
 		if !running {
@@ -218,41 +258,30 @@ func (s *Server) Routes() http.Handler {
 
 	static, _ := fs.Sub(webFS, "web")
 	mux.Handle("GET /", http.FileServerFS(static))
-	mux.HandleFunc("GET /events", s.handleEvents)
+	mux.HandleFunc("GET /state", s.handleState)
 	mux.HandleFunc("POST /pause", s.handlePause)
 	mux.HandleFunc("POST /restart", s.handleRestart)
 	return mux
 }
 
-// handleEvents envoie le dernier etat en flux SSE, au maximum ~60 fois/s.
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming non supporte", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-
-	for {
-		s.mu.Lock()
-		data, ch := s.latest, s.notify
-		s.mu.Unlock()
-
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-
+// handleState renvoie le dernier etat binaire, sans verrou (RCU). Si le
+// client a deja la version courante (?v=...), on attend la suivante (au plus
+// 1 seconde) au lieu de renvoyer la meme.
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	f := s.current.Load()
+	if v, err := strconv.ParseUint(r.URL.Query().Get("v"), 10, 64); err == nil && v == f.version {
 		select {
+		case <-f.next:
+			f = s.current.Load()
+		case <-time.After(time.Second):
 		case <-r.Context().Done():
 			return
-		case <-time.After(16 * time.Millisecond):
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ch:
 		}
 	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Version", strconv.FormatUint(f.version, 10))
+	w.Write(f.data)
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
