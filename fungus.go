@@ -19,7 +19,10 @@
 //     fourmi est dessus a ce moment-la.
 package main
 
-import "math"
+import (
+	"math"
+	"slices"
+)
 
 const (
 	NoFungus = iota
@@ -159,34 +162,60 @@ func (w *World) spore(x, y, parent int) {
 }
 
 // fungusAura : chaque champignon peut contaminer les fourmis proches
-// (chaque champignon est compare a toutes les fourmis).
+// (rayon 1, ou 2 pour un venimeux).
+//
+// V6 (aura inversee) : au lieu que chaque champignon relise toutes les
+// fourmis (O(C*N)), chaque fourmi lit les 5x5 cases autour d'elle (O(N*25)).
+// Pour garder la meme partie, les tirages aleatoires doivent se faire dans
+// l'ordre d'origine : par case de champignon (ligne par ligne), puis par
+// fourmi. On note donc chaque couple (case, fourmi) a portee dans une cle
+// case<<32 | fourmi, on trie ces cles, puis on tire dans cet ordre. Une
+// fourmi contaminee ne tire plus (comme avant, grace au test a.Virus == 0).
 func (w *World) fungusAura() {
-	for y := 0; y < w.H; y++ {
-		for x := 0; x < w.W; x++ {
-			f := w.Fungus[y][x]
-			if f.Kind == NoFungus {
-				continue
-			}
-			venom := f.Kind == Venomous
-			r, chance := 1, AuraInfect
-			if venom {
-				r, chance = 2, VenomAuraInfect
-			}
-			for _, a := range w.Ants {
+	pairs := w.auraBuf[:0]
+	for i, a := range w.Ants {
+		healthy := a.Virus == 0
+		for y := max(0, a.Y-2); y <= min(w.H-1, a.Y+2); y++ {
+			for x := max(0, a.X-2); x <= min(w.W-1, a.X+2); x++ {
+				kind := w.Fungus[y][x].Kind
+				if kind == NoFungus {
+					continue
+				}
+				r := 1
+				if kind == Venomous {
+					r = 2
+				}
 				if abs(a.X-x) > r || abs(a.Y-y) > r {
 					continue
 				}
-				if venom && a.Alarm < 15 {
-					a.Alarm = 15
+				if kind == Venomous && a.Alarm < 15 {
+					a.Alarm = 15 // l'alerte ne depend pas de l'ordre
 				}
-				risk := chance
-				if a.Soldier {
-					risk *= SoldierArmor
-				}
-				if a.Virus == 0 && w.rng.Float64() < risk {
-					w.infect(a, InfectLoad, venom, true)
+				if healthy {
+					pairs = append(pairs, uint64(y*w.W+x)<<32|uint64(i))
 				}
 			}
+		}
+	}
+	slices.Sort(pairs)
+	w.auraBuf = pairs
+
+	for _, key := range pairs {
+		a := w.Ants[uint32(key)]
+		if a.Virus != 0 {
+			continue // deja contaminee par un champignon precedent
+		}
+		cell := int(key >> 32)
+		venom := w.Fungus[cell/w.W][cell%w.W].Kind == Venomous
+		risk := AuraInfect
+		if venom {
+			risk = VenomAuraInfect
+		}
+		if a.Soldier {
+			risk *= SoldierArmor
+		}
+		if w.rng.Float64() < risk {
+			w.infect(a, InfectLoad, venom, true)
 		}
 	}
 }
