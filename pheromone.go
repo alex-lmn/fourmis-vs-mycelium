@@ -8,6 +8,11 @@
 // voisines. La pluie efface les pheromones plus vite.
 package main
 
+import (
+	"runtime"
+	"sync"
+)
+
 const PherMax = 10.0
 
 // V3 (zero allocation) : les grilles sont des tableaux plats de W*H cases
@@ -30,8 +35,33 @@ func (w *World) stepPheromones() {
 // diffuse ecrit dans next la grille g ou chaque case se rapproche de la
 // moyenne de ses voisines, puis s'evapore. Toutes les cases de next sont
 // ecrites : pas besoin de la remettre a zero.
+//
+// V8 (pool de workers borne) : la carte est decoupee en bandes de lignes,
+// une par worker, au plus runtime.GOMAXPROCS(0) workers. Chaque case ne
+// depend que de g (lu) et n'ecrit que sa propre case de next : aucun verrou
+// n'est necessaire et le resultat est identique au calcul sequentiel. Le
+// WaitGroup attend la fin de toutes les bandes avant l'echange des grilles.
 func (w *World) diffuse(g, next []float64, rate, evap float64) {
-	for y := 0; y < w.H; y++ {
+	workers := min(runtime.GOMAXPROCS(0), w.H)
+	if workers <= 1 {
+		w.diffuseRows(g, next, rate, evap, 0, w.H)
+		return
+	}
+	band := (w.H + workers - 1) / workers
+	var wg sync.WaitGroup
+	for y0 := 0; y0 < w.H; y0 += band {
+		wg.Add(1)
+		go func(y0, y1 int) {
+			defer wg.Done()
+			w.diffuseRows(g, next, rate, evap, y0, y1)
+		}(y0, min(y0+band, w.H))
+	}
+	wg.Wait()
+}
+
+// diffuseRows calcule les lignes [y0, y1) de la diffusion.
+func (w *World) diffuseRows(g, next []float64, rate, evap float64, y0, y1 int) {
+	for y := y0; y < y1; y++ {
 		for x := 0; x < w.W; x++ {
 			sum, n := 0.0, 0
 			for d := 0; d < 8; d++ {
