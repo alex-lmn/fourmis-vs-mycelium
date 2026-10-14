@@ -147,8 +147,7 @@ func (s *Server) publish() {
 	}
 
 	ants := make([]int, 0, len(w.Ants)*3)
-	for i := range w.Ants {
-		a := &w.Ants[i]
+	for _, a := range w.Ants {
 		kind := 0
 		switch {
 		case a.Zombie():

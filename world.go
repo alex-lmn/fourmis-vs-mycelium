@@ -106,7 +106,7 @@ type World struct {
 	// Tampons reutilises d'un tick a l'autre (V3, zero allocation).
 	lifeCount     []int    // fungusLife : nombre de champignons voisins
 	lifeVenom     []int    // fungusLife : nombre de venimeux voisins
-	antsSpare     []Ant    // stepAnts : liste des survivantes
+	antsSpare     []*Ant   // stepAnts : liste des survivantes
 	forestScratch [][2]int // rememberForest : cases de foret
 
 	// Grille spatiale (V4, voir spatial.go).
@@ -121,7 +121,7 @@ type World struct {
 	Eggs  []Egg
 	// Cases de foret dont la colonie se souvient (voir rememberForest).
 	ForestMemory [][2]int
-	Ants         []Ant // V7 : fourmis contigues (un seul bloc)
+	Ants         []*Ant
 	nextID       int
 
 	Raining  bool
@@ -302,8 +302,7 @@ func (w *World) countAll() {
 
 	w.Workers, w.Soldiers, w.Carrying = 0, 0, 0
 	w.Infected, w.Zombies, w.ImmuneN = 0, 0, 0
-	for i := range w.Ants {
-		a := &w.Ants[i]
+	for _, a := range w.Ants {
 		if a.Soldier {
 			w.Soldiers++
 		} else {

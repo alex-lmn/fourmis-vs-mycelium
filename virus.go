@@ -112,8 +112,7 @@ func (w *World) cure(a *Ant) {
 
 // spreadVirus : chaque fourmi infectee peut contaminer celles qui la touchent.
 func (w *World) spreadVirus() {
-	for i := range w.Ants {
-		a := &w.Ants[i]
+	for _, a := range w.Ants {
 		// Quarantaine : une malade qui se repose au nid est isolee.
 		if a.Virus == 0 || (a.Resting && w.inNest(a.X, a.Y)) {
 			continue
@@ -130,14 +129,14 @@ func (w *World) spreadVirus() {
 		// meme ordre que la boucle naive.
 		touching := w.touchBuf[:0]
 		for _, j := range w.near(a.X, a.Y, 1) {
-			if b := &w.Ants[j]; abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 {
+			if b := w.Ants[j]; abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 {
 				touching = append(touching, j)
 			}
 		}
 		slices.Sort(touching)
 		w.touchBuf = touching
 		for _, j := range touching {
-			b := &w.Ants[j]
+			b := w.Ants[j]
 			if b == a || b.Virus > 0 || b.Immune > 0 {
 				continue
 			}
@@ -152,14 +151,13 @@ func (w *World) spreadVirus() {
 // nettoyee par les soeurs saines qui la touchent (on parcourt toutes les
 // fourmis).
 func (w *World) groom() {
-	for i := range w.Ants {
-		a := &w.Ants[i]
+	for _, a := range w.Ants {
 		if a.Virus == 0 || a.Virus > SickLevel {
 			continue
 		}
 		helpers := 0
 		for _, j := range w.near(a.X, a.Y, 1) { // V4 : on compte, l'ordre ne compte pas
-			b := &w.Ants[j]
+			b := w.Ants[j]
 			if b != a && b.Virus == 0 && abs(a.X-b.X) <= 1 && abs(a.Y-b.Y) <= 1 {
 				helpers++
 				if helpers == GroomMax {
@@ -214,7 +212,7 @@ func (w *World) nearestHealthy(a *Ant, r int) (*Ant, bool) {
 	bestDist := math.Inf(1)
 	// V4 : cellules voisines ; a distance egale, plus petit indice (= boucle naive).
 	for _, j := range w.near(a.X, a.Y, r) {
-		b := &w.Ants[j]
+		b := w.Ants[j]
 		if b == a || b.Virus > 0 || b.Immune > 0 || abs(b.X-a.X) > r || abs(b.Y-a.Y) > r {
 			continue
 		}
@@ -230,7 +228,7 @@ func (w *World) nearestHealthy(a *Ant, r int) (*Ant, bool) {
 func (w *World) virusCorpse(a *Ant) {
 	// Nuage toxique : on parcourt toutes les fourmis. L'immunite ne protege pas.
 	for _, j := range w.near(a.X, a.Y, DeathRadius) { // V4 : chaque voisine independante
-		b := &w.Ants[j]
+		b := w.Ants[j]
 		if b == a || b.Dead || abs(b.X-a.X) > DeathRadius || abs(b.Y-a.Y) > DeathRadius {
 			continue
 		}
