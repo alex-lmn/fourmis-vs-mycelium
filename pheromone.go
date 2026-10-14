@@ -8,7 +8,10 @@
 // voisines. La pluie efface les pheromones plus vite.
 package main
 
-import "sync"
+import (
+	"runtime"
+	"sync"
+)
 
 const PherMax = 10.0
 
@@ -38,17 +41,20 @@ func (w *World) stepPheromones() {
 // depend que de g (lu) et n'ecrit que sa propre case de next : aucun verrou
 // n'est necessaire et le resultat est identique au calcul sequentiel. Le
 // WaitGroup attend la fin de toutes les bandes avant l'echange des grilles.
-//
-// V9 (echec tente expres) : parallelisme non borne, une goroutine par ligne
-// de la carte (400 par diffusion sur la carte par defaut, 1 200 par tick).
 func (w *World) diffuse(g, next []float64, rate, evap float64) {
+	workers := min(runtime.GOMAXPROCS(0), w.H)
+	if workers <= 1 {
+		w.diffuseRows(g, next, rate, evap, 0, w.H)
+		return
+	}
+	band := (w.H + workers - 1) / workers
 	var wg sync.WaitGroup
-	for y := 0; y < w.H; y++ {
+	for y0 := 0; y0 < w.H; y0 += band {
 		wg.Add(1)
-		go func(y int) {
+		go func(y0, y1 int) {
 			defer wg.Done()
-			w.diffuseRows(g, next, rate, evap, y, y+1)
-		}(y)
+			w.diffuseRows(g, next, rate, evap, y0, y1)
+		}(y0, min(y0+band, w.H))
 	}
 	wg.Wait()
 }
