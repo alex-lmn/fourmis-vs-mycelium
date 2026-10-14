@@ -16,7 +16,6 @@ package main
 import (
 	"math"
 	"math/rand"
-	"sync"
 )
 
 // Parametres generaux de la simulation.
@@ -102,8 +101,7 @@ type World struct {
 	PherFood   []float64
 	PherHome   []float64
 	PherDanger []float64
-	pherSpare  []float64  // tampon de rechange pour la diffusion (double tampon)
-	pherMu     sync.Mutex // V10 : verrou global sur les ecritures de la diffusion
+	pherSpare  []float64 // tampon de rechange pour la diffusion (double tampon)
 
 	// Tampons reutilises d'un tick a l'autre (V3, zero allocation).
 	lifeCount     []int    // fungusLife : nombre de champignons voisins

@@ -75,11 +75,7 @@ func (w *World) diffuseRows(g, next []float64, rate, evap float64, y0, y1 int) {
 			if v < 0.001 {
 				v = 0
 			}
-			// V10 (echec tente expres) : un seul verrou global protege chaque
-			// ecriture, alors que les workers n'ecrivent jamais la meme case.
-			w.pherMu.Lock()
 			next[y*w.W+x] = v
-			w.pherMu.Unlock()
 		}
 	}
 }
